@@ -51,4 +51,4 @@ app.*.map.json
 .kiro/
 .agent/
 .claude/
-Plan_and_Design/
+Plan_and_Design/ 

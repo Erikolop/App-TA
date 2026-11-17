@@ -95,12 +95,18 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
           ElevatedButton(
             onPressed: () async {
               if (!formKey.currentState!.validate()) return;
-              Navigator.of(ctx).pop();
+              // Capture everything before any async gap or pop
               final id = device['id'] as int;
-              await context.read<DeviceProvider>().addDevice(id, nameCtrl.text.trim(), plantCtrl.text.trim());
+              final name = nameCtrl.text.trim();
+              final plant = plantCtrl.text.trim();
+              final provider = context.read<DeviceProvider>();
+              final nav = Navigator.of(context);
+              final messenger = ScaffoldMessenger.of(context);
+              Navigator.of(ctx).pop(); // close dialog
+              await provider.addDevice(id, name, plant);
               if (mounted) {
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
+                nav.pop(); // go back to device list
+                messenger.showSnackBar(
                   SnackBar(content: const Text('Device added'), backgroundColor: AppColors.accent, behavior: SnackBarBehavior.floating),
                 );
               }

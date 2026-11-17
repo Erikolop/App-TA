@@ -73,6 +73,7 @@ class Device {
     int? maxRunS,
     int? cooldownMin,
     bool? manualPump,
+    bool? pumpOn,
   }) =>
       Device(
         id: id,
@@ -91,7 +92,7 @@ class Device {
         airTemp: airTemp,
         airHumidity: airHumidity,
         tankLevel: tankLevel,
-        pumpOn: pumpOn,
+        pumpOn: pumpOn ?? this.pumpOn,
         readingAt: readingAt,
       );
 
