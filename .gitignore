@@ -46,3 +46,9 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+.gemini/
+.impeccable/
+.kiro/
+.agent/
+.claude/
+Plan_and_Design/
