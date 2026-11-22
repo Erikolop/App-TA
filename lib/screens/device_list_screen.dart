@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import '../core/theme.dart';
+import '../core/animated_page_route.dart';
 import '../providers/device_provider.dart';
 import '../widgets/device_card.dart';
 import '../widgets/shimmer_card.dart';
@@ -25,10 +26,7 @@ class DeviceListScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: 'Add Device',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const AddDeviceScreen()),
-            ),
+            onPressed: () => context.pushSlideUp(const AddDeviceScreen()),
           ),
         ],
       ),
@@ -41,10 +39,8 @@ class DeviceListScreen extends StatelessWidget {
                 ? _ErrorState(message: error, onRetry: provider.refresh)
                 : devices.isEmpty
                     ? _EmptyState(
-                        onAddTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const AddDeviceScreen()),
+                        onAddTap: () => context.pushSlideUp(
+                          const AddDeviceScreen(),
                         ),
                       )
                     : ListView.separated(
@@ -54,12 +50,8 @@ class DeviceListScreen extends StatelessWidget {
                             const SizedBox(height: AppSpacing.md),
                         itemBuilder: (ctx, i) => DeviceCard(
                           device: devices[i],
-                          onTap: () => Navigator.push(
-                            ctx,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  DeviceDetailScreen(deviceId: devices[i].id),
-                            ),
+                          onTap: () => ctx.pushAnimated(
+                            DeviceDetailScreen(deviceId: devices[i].id),
                           ),
                         ),
                       ),

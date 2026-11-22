@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'core/theme.dart';
 import 'providers/device_provider.dart';
 import 'screens/shell.dart';
+import 'screens/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,8 +16,21 @@ void main() async {
   runApp(const SmartGrowApp());
 }
 
-class SmartGrowApp extends StatelessWidget {
+class SmartGrowApp extends StatefulWidget {
   const SmartGrowApp({super.key});
+
+  @override
+  State<SmartGrowApp> createState() => _SmartGrowAppState();
+}
+
+class _SmartGrowAppState extends State<SmartGrowApp> {
+  bool _showSplash = true;
+
+  void _onSplashComplete() {
+    setState(() {
+      _showSplash = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +42,9 @@ class SmartGrowApp extends StatelessWidget {
         theme: buildTheme(),
         darkTheme: buildTheme(dark: true),
         themeMode: ThemeMode.system,
-        home: const Shell(),
+        home: _showSplash
+            ? SplashScreen(onComplete: _onSplashComplete)
+            : const Shell(),
       ),
     );
   }

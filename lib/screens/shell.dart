@@ -23,13 +23,23 @@ class _ShellState extends State<Shell> {
     ProfileScreen(),
   ];
 
+  void _onDestinationSelected(int newIndex) {
+    if (newIndex == _index) return;
+    setState(() {
+      _index = newIndex;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(index: _index, children: _pages),
+      body: IndexedStack(
+        index: _index,
+        children: _pages,
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: _onDestinationSelected,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),

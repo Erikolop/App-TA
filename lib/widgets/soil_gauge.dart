@@ -2,8 +2,8 @@ import 'dart:math' as math;
 import 'package:material_ui/material_ui.dart';
 import '../core/theme.dart';
 
-/// Semicircular soil moisture gauge.
-class SoilGauge extends StatelessWidget {
+/// Semicircular soil moisture gauge with animated needle.
+class SoilGauge extends StatefulWidget {
   final int? value; // 0–100, null = no reading yet
   final int dryThreshold;
   final int wetThreshold;
@@ -18,53 +18,137 @@ class SoilGauge extends StatelessWidget {
   });
 
   @override
+  State<SoilGauge> createState() => _SoilGaugeState();
+}
+
+class _SoilGaugeState extends State<SoilGauge>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _fillAnim;
+  late Animation<Color?> _flashAnim;
+  double _prevFraction = 0;
+  int? _prevValue;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    final fraction = widget.value != null ? (widget.value! / 100).clamp(0.0, 1.0) : 0.0;
+    _fillAnim = Tween<double>(begin: 0, end: fraction).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic),
+    );
+    _flashAnim = ColorTween(
+      begin: Colors.transparent,
+      end: Colors.transparent,
+    ).animate(_ctrl);
+    _prevFraction = fraction;
+    _prevValue = widget.value;
+    if (widget.value != null) _ctrl.forward();
+  }
+
+  @override
+  void didUpdateWidget(SoilGauge old) {
+    super.didUpdateWidget(old);
+    final newFraction = widget.value != null ? (widget.value! / 100).clamp(0.0, 1.0) : 0.0;
+    if (widget.value != _prevValue) {
+      _fillAnim = Tween<double>(begin: _prevFraction, end: newFraction).animate(
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic),
+      );
+      // Flash highlight on value change (not on first paint)
+      if (_prevValue != null) {
+        _flashAnim = ColorTween(
+          begin: AppColors.accent.withValues(alpha: 0.12),
+          end: Colors.transparent,
+        ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+      }
+      _prevFraction = newFraction;
+      _prevValue = widget.value;
+      _ctrl.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size * 0.65,
-      child: CustomPaint(
-        painter: _GaugePainter(
-          value: value,
-          dryThreshold: dryThreshold,
-          wetThreshold: wetThreshold,
-        ),
-        child: Align(
-          alignment: const Alignment(0, 0.4),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                value != null ? '$value%' : '--',
-                style: const TextStyle(
-                  fontSize: 36,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
-                  height: 1,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Soil Moisture',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) {
+        return Container(
+          decoration: BoxDecoration(
+            color: _flashAnim.value,
+            borderRadius: BorderRadius.circular(widget.size / 2),
           ),
-        ),
-      ),
+          child: SizedBox(
+            width: widget.size,
+            height: widget.size * 0.65,
+            child: CustomPaint(
+              painter: _GaugePainter(
+                fraction: _fillAnim.value,
+                dryThreshold: widget.dryThreshold,
+                wetThreshold: widget.wetThreshold,
+              ),
+              child: Align(
+                alignment: const Alignment(0, 0.4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 350),
+                      transitionBuilder: (child, anim) => FadeTransition(
+                        opacity: anim,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, 0.3),
+                            end: Offset.zero,
+                          ).animate(anim),
+                          child: child,
+                        ),
+                      ),
+                      child: Text(
+                        widget.value != null ? '${widget.value}%' : '--',
+                        key: ValueKey(widget.value),
+                        style: const TextStyle(
+                          fontSize: 36,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Soil Moisture',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
 
 class _GaugePainter extends CustomPainter {
-  final int? value;
+  final double fraction; // 0.0 – 1.0, already animated
   final int dryThreshold;
   final int wetThreshold;
 
   const _GaugePainter({
-    this.value,
+    required this.fraction,
     required this.dryThreshold,
     required this.wetThreshold,
   });
@@ -92,70 +176,50 @@ class _GaugePainter extends CustomPainter {
         ..strokeCap = StrokeCap.round,
     );
 
-    // Fill arc
-    if (value != null) {
-      final fraction = (value! / 100).clamp(0.0, 1.0);
+    // Fill arc — uses pre-animated fraction
+    if (fraction > 0) {
       canvas.drawArc(
         rect,
         _startAngle,
         _sweepAngle * fraction,
         false,
         Paint()
-          ..color = AppColors.accent
+          ..color = _fillColor(fraction * 100)
           ..strokeWidth = 14
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round,
       );
     }
 
-    // Dry threshold marker
-    _drawMarker(canvas, cx, cy, radius, dryThreshold / 100,
-        AppColors.accent.withValues(alpha: 0.45));
-
-    // Wet threshold marker
-    _drawMarker(canvas, cx, cy, radius, wetThreshold / 100, AppColors.accent);
-
-    // Range labels
-    _drawLabel(canvas, size, '0%', 0.0, cx, cy, radius);
-    _drawLabel(canvas, size, '100%', 1.0, cx, cy, radius);
+    // Threshold tick marks
+    _drawTick(canvas, cx, cy, radius, dryThreshold / 100, AppColors.textSecondary);
+    _drawTick(canvas, cx, cy, radius, wetThreshold / 100, AppColors.textSecondary);
   }
 
-  void _drawMarker(
-      Canvas canvas, double cx, double cy, double r, double fraction, Color color) {
-    final angle = _startAngle + _sweepAngle * fraction;
-    final mx = cx + r * math.cos(angle);
-    final my = cy + r * math.sin(angle);
-    canvas.drawCircle(
-      Offset(mx, my),
-      5,
-      Paint()..color = color,
+  Color _fillColor(double percent) {
+    if (percent < dryThreshold) return Colors.orange;
+    if (percent > wetThreshold) return Colors.blue;
+    return AppColors.accent;
+  }
+
+  void _drawTick(Canvas canvas, double cx, double cy, double radius,
+      double frac, Color color) {
+    final angle = _startAngle + _sweepAngle * frac;
+    final inner = radius - 10;
+    final outer = radius + 10;
+    canvas.drawLine(
+      Offset(cx + inner * math.cos(angle), cy + inner * math.sin(angle)),
+      Offset(cx + outer * math.cos(angle), cy + outer * math.sin(angle)),
+      Paint()
+        ..color = color
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
     );
-  }
-
-  void _drawLabel(Canvas canvas, Size size, String text, double fraction,
-      double cx, double cy, double r) {
-    final angle = _startAngle + _sweepAngle * fraction;
-    final lx = cx + (r + 18) * math.cos(angle);
-    final ly = cy + (r + 18) * math.sin(angle);
-
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: const TextStyle(
-          fontSize: 10,
-          color: AppColors.textSecondary,
-          fontWeight: FontWeight.w400,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-
-    tp.paint(canvas, Offset(lx - tp.width / 2, ly - tp.height / 2));
   }
 
   @override
   bool shouldRepaint(_GaugePainter old) =>
-      old.value != value ||
-      old.dryThreshold != dryThreshold ||
-      old.wetThreshold != wetThreshold;
+      fraction != old.fraction ||
+      dryThreshold != old.dryThreshold ||
+      wetThreshold != old.wetThreshold;
 }

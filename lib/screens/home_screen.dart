@@ -4,6 +4,7 @@ import 'package:shimmer/shimmer.dart';
 import '../core/theme.dart';
 import '../models/device.dart';
 import '../providers/device_provider.dart';
+import '../core/animated_page_route.dart';
 import '../widgets/soil_gauge.dart';
 import 'device_detail_screen.dart';
 
@@ -72,12 +73,8 @@ class HomeScreen extends StatelessWidget {
               SliverToBoxAdapter(
                 child: _DeviceFocusCard(
                   device: devices.first,
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          DeviceDetailScreen(deviceId: devices.first.id),
-                    ),
+                  onTap: () => context.pushAnimated(
+                    DeviceDetailScreen(deviceId: devices.first.id),
                   ),
                   onModeChanged: (mode) => context
                       .read<DeviceProvider>()
@@ -107,12 +104,8 @@ class HomeScreen extends StatelessWidget {
                           AppSpacing.base, AppSpacing.md),
                       child: _MiniDeviceCard(
                         device: d,
-                        onTap: () => Navigator.push(
-                          ctx,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                DeviceDetailScreen(deviceId: d.id),
-                          ),
+                        onTap: () => ctx.pushAnimated(
+                          DeviceDetailScreen(deviceId: d.id),
                         ),
                       ),
                     );
@@ -331,7 +324,7 @@ class _DeviceFocusCard extends StatelessWidget {
               ),
             ),
 
-            // Air readings
+            // Air readings with animated values
             if (device.airTemp != null || device.airHumidity != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(
@@ -340,11 +333,17 @@ class _DeviceFocusCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     if (device.airTemp != null)
-                      _StatChip(icon: Icons.thermostat_outlined, label: '${device.airTemp!.toStringAsFixed(1)}°C'),
+                      _AnimatedStatChip(
+                        icon: Icons.thermostat_outlined,
+                        label: '${device.airTemp!.toStringAsFixed(1)}°C',
+                      ),
                     if (device.airTemp != null && device.airHumidity != null)
                       const SizedBox(width: AppSpacing.sm),
                     if (device.airHumidity != null)
-                      _StatChip(icon: Icons.water_outlined, label: '${device.airHumidity!.toStringAsFixed(0)}%'),
+                      _AnimatedStatChip(
+                        icon: Icons.water_outlined,
+                        label: '${device.airHumidity!.toStringAsFixed(0)}%',
+                      ),
                   ],
                 ),
               ),
@@ -365,8 +364,7 @@ class _DeviceFocusCard extends StatelessWidget {
                           padding: const EdgeInsets.only(right: 6),
                           child: GestureDetector(
                             onTap: () => onModeChanged(m),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
+                            child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 14, vertical: 6),
                               decoration: BoxDecoration(
@@ -469,9 +467,8 @@ class _MiniDeviceCard extends StatelessWidget {
               ),
             ]),
           ),
-          Text(
-            device.soilMoisture != null ? '${device.soilMoisture}%' : '--',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+          _AnimatedMoistureValue(
+            value: device.soilMoisture != null ? '${device.soilMoisture}%' : '--',
           ),
           const SizedBox(width: AppSpacing.sm),
           const Icon(Icons.chevron_right, size: 18, color: AppColors.textSecondary),
@@ -481,30 +478,171 @@ class _MiniDeviceCard extends StatelessWidget {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ── Animated moisture value for mini card ─────────────────────────────────
 
-class _StatChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  const _StatChip({required this.icon, required this.label});
+class _AnimatedMoistureValue extends StatefulWidget {
+  final String value;
+  const _AnimatedMoistureValue({required this.value});
+
+  @override
+  State<_AnimatedMoistureValue> createState() => _AnimatedMoistureValueState();
+}
+
+class _AnimatedMoistureValueState extends State<_AnimatedMoistureValue>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<Color?> _flashAnim;
+  String? _prev;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _flashAnim = ColorTween(
+      begin: AppColors.accent.withValues(alpha: 0.18),
+      end: Colors.transparent,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _prev = widget.value;
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedMoistureValue old) {
+    super.didUpdateWidget(old);
+    if (widget.value != _prev) {
+      _prev = widget.value;
+      _ctrl.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: AppColors.canvas,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.divider),
+    return AnimatedBuilder(
+      animation: _flashAnim,
+      builder: (_, child) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: _flashAnim.value,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: child,
+      ),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 350),
+        transitionBuilder: (child, anim) => FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.3),
+              end: Offset.zero,
+            ).animate(anim),
+            child: child,
+          ),
+        ),
+        child: Text(
+          widget.value,
+          key: ValueKey(widget.value),
+          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Animated stat chip for focus card ─────────────────────────────────────
+
+class _AnimatedStatChip extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  const _AnimatedStatChip({required this.icon, required this.label});
+
+  @override
+  State<_AnimatedStatChip> createState() => _AnimatedStatChipState();
+}
+
+class _AnimatedStatChipState extends State<_AnimatedStatChip>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<Color?> _flashAnim;
+  String? _prev;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _flashAnim = ColorTween(
+      begin: AppColors.accent.withValues(alpha: 0.15),
+      end: AppColors.canvas,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _prev = widget.label;
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedStatChip old) {
+    super.didUpdateWidget(old);
+    if (widget.label != _prev) {
+      _prev = widget.label;
+      _ctrl.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _flashAnim,
+      builder: (_, child) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: _flashAnim.value,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: child,
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 14, color: AppColors.textSecondary),
+        Icon(widget.icon, size: 14, color: AppColors.textSecondary),
         const SizedBox(width: 4),
-        Text(label, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 350),
+          transitionBuilder: (child, anim) => FadeTransition(
+            opacity: anim,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.3),
+                end: Offset.zero,
+              ).animate(anim),
+              child: child,
+            ),
+          ),
+          child: Text(
+            widget.label,
+            key: ValueKey(widget.label),
+            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+        ),
       ]),
     );
   }
 }
+
+// ── Empty state ───────────────────────────────────────────────────────────
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState();

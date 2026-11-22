@@ -27,21 +27,26 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   bool _readingsError = false;
   bool _retryingDevice = false;
   bool _retryingReadings = false;
-  Timer? _pollTimer;
   final _api = ApiService();
+
+  Timer? _readingsPollTimer;
+  DateTime? _lastReadingAt;
 
   @override
   void initState() {
     super.initState();
     _loadDevice();
     _loadReadings();
-    _pollTimer = Timer.periodic(
-        const Duration(seconds: 5), (_) => _loadDevice(silent: true));
+    // Poll readings every 30s so the chart stays live without leaving screen.
+    _readingsPollTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _loadReadings(silent: true),
+    );
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
+    _readingsPollTimer?.cancel();
     super.dispose();
   }
 
@@ -57,13 +62,13 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
   }
 
-  Future<void> _loadReadings() async {
-    if (mounted) setState(() { _loadingReadings = true; _readingsError = false; });
+  Future<void> _loadReadings({bool silent = false}) async {
+    if (!silent && mounted) setState(() { _loadingReadings = true; _readingsError = false; });
     try {
       final r = await _api.fetchReadings(widget.deviceId, hours: 24);
       if (mounted) setState(() => _readings = r);
     } catch (_) {
-      if (mounted) setState(() => _readingsError = true);
+      if (mounted && !silent) setState(() => _readingsError = true);
     } finally {
       if (mounted) setState(() => _loadingReadings = false);
     }
@@ -97,6 +102,14 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         .where((d) => d.id == widget.deviceId)
         .firstOrNull;
     final device = providerDevice ?? _device;
+
+    // Auto-update graph when new telemetry is received via 5s provider polling
+    if (device?.readingAt != null && device!.readingAt != _lastReadingAt) {
+      _lastReadingAt = device.readingAt;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadReadings(silent: true);
+      });
+    }
 
     return Scaffold(
       backgroundColor: AppColors.canvas,
@@ -206,6 +219,106 @@ class _RetryButton extends StatelessWidget {
   }
 }
 
+// ── Animated value widget ─────────────────────────────────────────────────
+
+/// Displays a numeric value with a brief highlight flash when it changes.
+class _AnimatedValue extends StatefulWidget {
+  final String value;
+  final TextStyle style;
+  final String? suffix;
+  final TextStyle? suffixStyle;
+
+  const _AnimatedValue({
+    required this.value,
+    required this.style,
+    this.suffix,
+    this.suffixStyle,
+  });
+
+  @override
+  State<_AnimatedValue> createState() => _AnimatedValueState();
+}
+
+class _AnimatedValueState extends State<_AnimatedValue>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<Color?> _colorAnim;
+  String? _prev;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _colorAnim = ColorTween(
+      begin: AppColors.accent.withValues(alpha: 0.18),
+      end: Colors.transparent,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _prev = widget.value;
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedValue old) {
+    super.didUpdateWidget(old);
+    if (widget.value != _prev) {
+      _prev = widget.value;
+      _ctrl.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _colorAnim,
+      builder: (_, child) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: _colorAnim.value,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: child,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 350),
+            transitionBuilder: (child, anim) => FadeTransition(
+              opacity: anim,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.3),
+                  end: Offset.zero,
+                ).animate(anim),
+                child: child,
+              ),
+            ),
+            child: Text(
+              widget.value,
+              key: ValueKey(widget.value),
+              style: widget.style,
+            ),
+          ),
+          if (widget.suffix != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6, left: 2),
+              child: Text(widget.suffix!, style: widget.suffixStyle ?? widget.style),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Cards ─────────────────────────────────────────────────────────────────
 
 class _MoistureAirCard extends StatelessWidget {
@@ -224,16 +337,12 @@ class _MoistureAirCard extends StatelessWidget {
 
     return _Card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text(
-            '${device.soilMoisture ?? '--'}',
-            style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6, left: 2),
-            child: Text('%', style: TextStyle(fontSize: 20, color: AppColors.textSecondary)),
-          ),
-        ]),
+        _AnimatedValue(
+          value: '${device.soilMoisture ?? '--'}',
+          style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+          suffix: '%',
+          suffixStyle: TextStyle(fontSize: 20, color: AppColors.textSecondary),
+        ),
         Text('Soil Moisture', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
         if (device.airTemp != null || device.airHumidity != null) ...[
           const SizedBox(height: AppSpacing.md),
@@ -241,15 +350,19 @@ class _MoistureAirCard extends StatelessWidget {
             if (device.airTemp != null) ...[
               Icon(Icons.thermostat_outlined, size: 16, color: AppColors.textSecondary),
               const SizedBox(width: 4),
-              Text('${device.airTemp!.toStringAsFixed(1)}°C',
-                  style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+              _AnimatedValue(
+                value: '${device.airTemp!.toStringAsFixed(1)}°C',
+                style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
+              ),
               const SizedBox(width: AppSpacing.md),
             ],
             if (device.airHumidity != null) ...[
               Icon(Icons.water_outlined, size: 16, color: AppColors.textSecondary),
               const SizedBox(width: 4),
-              Text('${device.airHumidity!.toStringAsFixed(0)}%',
-                  style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+              _AnimatedValue(
+                value: '${device.airHumidity!.toStringAsFixed(0)}%',
+                style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
+              ),
             ],
           ]),
         ],
@@ -319,13 +432,46 @@ class _MoistureAirCard extends StatelessWidget {
   }
 }
 
-class _ModeCard extends StatelessWidget {
+class _ModeCard extends StatefulWidget {
   final Device device;
   final void Function(Map<String, dynamic>) onPatch;
   const _ModeCard({required this.device, required this.onPatch});
 
   @override
+  State<_ModeCard> createState() => _ModeCardState();
+}
+
+class _ModeCardState extends State<_ModeCard> {
+  // Local optimistic selection — immediately reflects the user's tap so the
+  // button doesn't flicker back while waiting for the provider round-trip.
+  String? _pendingMode;
+
+  @override
+  void didUpdateWidget(_ModeCard old) {
+    super.didUpdateWidget(old);
+    // Once the server value matches what we sent, clear the local override.
+    if (_pendingMode != null && widget.device.mode == _pendingMode) {
+      _pendingMode = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
+
+  void _onModeSelect(String mode) {
+    // Apply locally right away so there's no visual flicker.
+    setState(() => _pendingMode = mode);
+    // Fire the patch immediately — debounce caused the ghost-state window.
+    widget.onPatch({'mode': mode});
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Use the pending (optimistic) mode if we have one, otherwise use the
+    // server-confirmed mode from the provider.
+    final displayMode = _pendingMode ?? widget.device.mode;
     const modes = ['auto', 'manual', 'off'];
     return _Card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -334,15 +480,13 @@ class _ModeCard extends StatelessWidget {
         const SizedBox(height: AppSpacing.md),
         Row(
           children: modes.map((m) {
-            final selected = device.mode == m;
+            final selected = displayMode == m;
             return Expanded(
               child: Padding(
                 padding: EdgeInsets.only(right: m != modes.last ? 6 : 0),
                 child: GestureDetector(
-                  // onTap on GestureDetector is immediate — no delay
-                  onTap: selected ? null : () => onPatch({'mode': m}),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
+                  onTap: selected ? null : () => _onModeSelect(m),
+                  child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 11),
                     decoration: BoxDecoration(
                       color: selected ? AppColors.accent : AppColors.tabUnselected,
@@ -380,7 +524,9 @@ class _ThresholdsCard extends StatefulWidget {
 class _ThresholdsCardState extends State<_ThresholdsCard> {
   late double _dry;
   late double _wet;
-  bool _dragging = false; // don't sync from server while user is dragging
+
+  bool _draggingDry = false;
+  bool _draggingWet = false;
 
   @override
   void initState() {
@@ -391,13 +537,13 @@ class _ThresholdsCardState extends State<_ThresholdsCard> {
   @override
   void didUpdateWidget(_ThresholdsCard old) {
     super.didUpdateWidget(old);
-    // Only accept server values when the user is not touching the sliders.
-    if (!_dragging) _sync();
+    if (!_draggingDry) _dry = widget.device.dryThreshold.toDouble().clamp(0.0, 100.0);
+    if (!_draggingWet) _wet = widget.device.wetThreshold.toDouble().clamp(0.0, 100.0);
   }
 
   void _sync() {
-    _dry = widget.device.dryThreshold.toDouble().clamp(10.0, 89.0);
-    _wet = widget.device.wetThreshold.toDouble().clamp(11.0, 90.0);
+    _dry = widget.device.dryThreshold.toDouble().clamp(0.0, 100.0);
+    _wet = widget.device.wetThreshold.toDouble().clamp(0.0, 100.0);
   }
 
   @override
@@ -409,16 +555,22 @@ class _ThresholdsCardState extends State<_ThresholdsCard> {
         const SizedBox(height: AppSpacing.md),
         _SliderRow(
           label: 'Dry', value: _dry,
-          min: 10, max: _wet - 1,
-          onChanged: (v) => setState(() { _dragging = true; _dry = v; }),
-          onChangeEnd: (v) { setState(() => _dragging = false); widget.onPatch({'dry_threshold': v.round()}); },
+          min: 0, max: 100,
+          onChanged: (v) => setState(() { _draggingDry = true; _dry = v; }),
+          onChangeEnd: (_) {
+            _draggingDry = false;
+            widget.onPatch({'dry_threshold': _dry.round()});
+          },
         ),
         const SizedBox(height: AppSpacing.sm),
         _SliderRow(
           label: 'Wet', value: _wet,
-          min: _dry + 1, max: 90,
-          onChanged: (v) => setState(() { _dragging = true; _wet = v; }),
-          onChangeEnd: (v) { setState(() => _dragging = false); widget.onPatch({'wet_threshold': v.round()}); },
+          min: 0, max: 100,
+          onChanged: (v) => setState(() { _draggingWet = true; _wet = v; }),
+          onChangeEnd: (_) {
+            _draggingWet = false;
+            widget.onPatch({'wet_threshold': _wet.round()});
+          },
         ),
       ]),
     );
@@ -447,7 +599,7 @@ class _SliderRow extends StatelessWidget {
           child: Slider(
             value: clamped,
             min: min, max: max,
-            divisions: (max - min).round().clamp(1, 80),
+            divisions: (max - min).round(),
             onChanged: onChanged,
             onChangeEnd: onChangeEnd,
           ),
@@ -557,6 +709,9 @@ class _ChartCard extends StatelessWidget {
           ),
         ],
       ),
+      // Animate the chart when data changes
+      duration: const Duration(milliseconds: 500),
+      curve: Curves.easeInOut,
     );
   }
 }

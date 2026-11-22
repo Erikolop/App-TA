@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../core/theme.dart';
 import '../providers/device_provider.dart';
 import '../models/watering_event.dart';
+import '../core/animated_page_route.dart';
 import '../widgets/shimmer_card.dart';
 import 'event_detail_screen.dart';
 
@@ -36,12 +37,8 @@ class EventListScreen extends StatelessWidget {
                             const SizedBox(height: AppSpacing.md),
                         itemBuilder: (ctx, i) => _EventCard(
                           event: events[i],
-                          onTap: () => Navigator.push(
-                            ctx,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  EventDetailScreen(eventId: events[i].id),
-                            ),
+                          onTap: () => ctx.pushAnimated(
+                            EventDetailScreen(eventId: events[i].id),
                           ),
                         ),
                       ),

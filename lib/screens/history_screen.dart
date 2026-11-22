@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -28,6 +29,27 @@ class _HistoryScreenState extends State<HistoryScreen> {
   // Track whether we've kicked off the first load.
   bool _initialLoadDone = false;
 
+  Timer? _pollTimer;
+  DateTime? _lastReadingAt;
+
+  @override
+  void initState() {
+    super.initState();
+    // Poll readings every 30s so the chart stays live.
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) {
+        if (_selectedDeviceId != null) _load(_selectedDeviceId!, silent: true);
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -42,8 +64,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  Future<void> _load(int deviceId, {bool isRetry = false}) async {
-    if (mounted) {
+  Future<void> _load(int deviceId, {bool isRetry = false, bool silent = false}) async {
+    if (!silent && mounted) {
       setState(() {
         _loading = true;
         _error = null;
@@ -53,9 +75,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final r = await _api.fetchReadings(deviceId, hours: _hours);
       if (mounted) setState(() => _readings = r);
     } catch (e) {
-      if (mounted) setState(() => _error = 'Could not load readings');
+      if (mounted && !silent) setState(() => _error = 'Could not load readings');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && !silent) setState(() => _loading = false);
     }
   }
 
@@ -71,6 +93,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget build(BuildContext context) {
     // Watch for device list changes (new devices added) but don't reload.
     final devices = context.watch<DeviceProvider>().devices;
+
+    // Auto-refresh graph when new reading arrives from ESP32 via provider
+    final currentDevice = devices.where((d) => d.id == _selectedDeviceId).firstOrNull;
+    if (currentDevice?.readingAt != null && currentDevice!.readingAt != _lastReadingAt) {
+      _lastReadingAt = currentDevice.readingAt;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedDeviceId != null) {
+          _load(_selectedDeviceId!, silent: true);
+        }
+      });
+    }
 
     // If devices arrived after the screen was built and we have none selected yet.
     if (_selectedDeviceId == null && devices.isNotEmpty) {
@@ -280,22 +313,8 @@ class _ChartView extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.all(AppSpacing.base),
       child: Column(children: [
-        // Stats row
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.base, vertical: AppSpacing.sm),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: AppRadius.cardBorderRadius,
-            border: Border.all(color: AppColors.divider),
-          ),
-          child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-            _Stat(label: 'Min', value: '$minV%'),
-            Container(width: 1, height: 32, color: AppColors.divider),
-            _Stat(label: 'Avg', value: '$avg%'),
-            Container(width: 1, height: 32, color: AppColors.divider),
-            _Stat(label: 'Max', value: '$maxV%'),
-          ]),
-        ),
+        // Stats row with animated values
+        _AnimatedStatsRow(minV: minV, avg: avg, maxV: maxV),
         const SizedBox(height: AppSpacing.base),
 
         // Chart
@@ -351,6 +370,9 @@ class _ChartView extends StatelessWidget {
                   ),
                 ],
               ),
+              // Animate the chart when data changes
+              duration: const Duration(milliseconds: 500),
+              curve: Curves.easeInOut,
             ),
           ),
         ),
@@ -359,20 +381,112 @@ class _ChartView extends StatelessWidget {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ── Animated stats row ────────────────────────────────────────────────────
 
-class _Stat extends StatelessWidget {
-  final String label, value;
-  const _Stat({required this.label, required this.value});
+class _AnimatedStatsRow extends StatefulWidget {
+  final int minV, avg, maxV;
+  const _AnimatedStatsRow({required this.minV, required this.avg, required this.maxV});
+
+  @override
+  State<_AnimatedStatsRow> createState() => _AnimatedStatsRowState();
+}
+
+class _AnimatedStatsRowState extends State<_AnimatedStatsRow>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<Color?> _flashAnim;
+
+  int? _prevMin, _prevAvg, _prevMax;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _flashAnim = ColorTween(
+      begin: AppColors.accent.withValues(alpha: 0.1),
+      end: Colors.transparent,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _prevMin = widget.minV;
+    _prevAvg = widget.avg;
+    _prevMax = widget.maxV;
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedStatsRow old) {
+    super.didUpdateWidget(old);
+    if (widget.minV != _prevMin || widget.avg != _prevAvg || widget.maxV != _prevMax) {
+      _prevMin = widget.minV;
+      _prevAvg = widget.avg;
+      _prevMax = widget.maxV;
+      _ctrl.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _flashAnim,
+      builder: (_, child) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.base, vertical: AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: _flashAnim.value ?? AppColors.surface,
+          borderRadius: AppRadius.cardBorderRadius,
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: child,
+      ),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+        _AnimatedStat(label: 'Min', value: widget.minV),
+        Container(width: 1, height: 32, color: AppColors.divider),
+        _AnimatedStat(label: 'Avg', value: widget.avg),
+        Container(width: 1, height: 32, color: AppColors.divider),
+        _AnimatedStat(label: 'Max', value: widget.maxV),
+      ]),
+    );
+  }
+}
+
+class _AnimatedStat extends StatelessWidget {
+  final String label;
+  final int value;
+  const _AnimatedStat({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 350),
+        transitionBuilder: (child, anim) => FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.3),
+              end: Offset.zero,
+            ).animate(anim),
+            child: child,
+          ),
+        ),
+        child: Text(
+          '$value%',
+          key: ValueKey(value),
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+        ),
+      ),
       Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
     ]);
   }
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────
 
 class _EmptyReadings extends StatelessWidget {
   const _EmptyReadings();
